@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""nb2pdf — notebook Jupyter para PDF paginado, sem passar pelo Colab.
+
+    nb2pdf caderno.ipynb                 # PDF ao lado do notebook
+    nb2pdf pasta/                        # todos os .ipynb da pasta
+    nb2pdf *.ipynb --out ~/entregas      # destino próprio
+    nb2pdf caderno.ipynb --sem-codigo    # só texto e resultados
+    nb2pdf caderno.ipynb --retrato       # A4 em pé
+    nb2pdf caderno.ipynb --abrir         # abre o PDF ao terminar
+
+Imprime as saídas já salvas no arquivo; não executa nada. Se o notebook
+estiver sem saídas, rode-o antes (jupyter nbconvert --execute --inplace).
+
+As dependências ficam num venv próprio em ~/.local/share/nb2pdf, criado na
+primeira execução.
+"""
+import argparse
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+VENV = pathlib.Path.home() / '.local/share/nb2pdf/venv'
+PACOTES = ['nbconvert', 'playwright']
+
+# Paisagem porque tabela larga de DataFrame corta na direita em retrato.
+# A escala de 0.8 no page.pdf() dá a folga restante.
+CSS = """
+<style>
+@page {{ size: A4 {orientacao}; }}
+body {{ max-width: none !important; }}
+.jp-Notebook {{ padding: 0 !important; }}
+.jp-InputArea, .jp-OutputArea-child {{ break-inside: avoid-page; }}
+h1, h2, h3 {{ break-after: avoid-page; }}
+.jp-RenderedImage img {{ max-width: 100% !important; height: auto !important; }}
+table {{ font-size: 0.82em; }}
+pre, code {{ font-size: 0.85em; }}
+</style>
+"""
+
+RODAPE = """
+<div style="width:100%;font-size:8px;color:#666;padding:0 14mm;
+            font-family:system-ui,sans-serif;display:flex;justify-content:space-between;">
+  <span>{titulo}</span><span class="pageNumber"></span>
+</div>
+"""
+
+
+def python_do_venv():
+    """Devolve o interpretador do venv, criando-o na primeira execução."""
+    executavel = VENV / 'bin/python'
+    if executavel.exists():
+        return executavel
+
+    print(f'Primeira execução: montando o venv em {VENV}', file=sys.stderr)
+    VENV.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([sys.executable, '-m', 'venv', str(VENV)], check=True)
+    subprocess.run([executavel, '-m', 'pip', 'install', '-q', *PACOTES], check=True)
+    subprocess.run([VENV / 'bin/playwright', 'install', 'chromium'], check=True)
+    return executavel
+
+
+def notebooks(entradas):
+    for entrada in entradas:
+        caminho = pathlib.Path(entrada).expanduser().resolve()
+        if caminho.is_dir():
+            yield from sorted(caminho.glob('*.ipynb'))
+        elif caminho.suffix == '.ipynb':
+            yield caminho
+        else:
+            print(f'ignorado (não é notebook): {caminho}', file=sys.stderr)
+
+
+def titulo_do_notebook(nb):
+    """Primeiro título de nível 1 do notebook; sem ele, o nome do arquivo."""
+    for celula in json.loads(nb.read_text())['cells']:
+        if celula['cell_type'] == 'markdown':
+            for linha in celula['source']:
+                if linha.startswith('# '):
+                    return linha[2:].strip()
+    return nb.stem.replace('-', ' ')
+
+
+def gerar(nb, destino, orientacao, sem_codigo, escala):
+    from playwright.sync_api import sync_playwright
+
+    html = destino / f'{nb.stem}.nb2pdf.html'
+    comando = [VENV / 'bin/jupyter', 'nbconvert', '--to', 'html', '--embed-images',
+               '--output', html.name, '--output-dir', str(destino), str(nb)]
+    if sem_codigo:
+        comando.append('--no-input')
+    subprocess.run(comando, check=True, capture_output=True)
+
+    titulo = titulo_do_notebook(nb)
+    html.write_text(html.read_text().replace(
+        '</head>', CSS.format(orientacao=orientacao) + '</head>', 1))
+
+    pdf = destino / f'{nb.stem}.pdf'
+    try:
+        with sync_playwright() as p:
+            navegador = p.chromium.launch()
+            pagina = navegador.new_page()
+            pagina.goto(html.as_uri(), wait_until='networkidle')
+            pagina.pdf(path=str(pdf), prefer_css_page_size=True, print_background=True,
+                       scale=escala, display_header_footer=True, header_template='<span></span>',
+                       footer_template=RODAPE.format(titulo=titulo),
+                       margin={'top': '10mm', 'bottom': '12mm', 'left': '12mm', 'right': '12mm'})
+            navegador.close()
+    finally:
+        html.unlink(missing_ok=True)
+
+    return pdf
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('entradas', nargs='+', help='notebooks ou pastas')
+    ap.add_argument('--out', help='pasta de destino (padrão: ao lado do notebook)')
+    ap.add_argument('--retrato', action='store_true', help='A4 em pé em vez de deitado')
+    ap.add_argument('--sem-codigo', action='store_true', help='esconde as células de código')
+    ap.add_argument('--escala', type=float, default=0.8, help='escala da impressão (padrão 0.8)')
+    ap.add_argument('--abrir', action='store_true', help='abre o PDF no visualizador ao terminar')
+    args = ap.parse_args()
+
+    executavel = python_do_venv()
+    if sys.prefix != str(VENV):
+        # Reexecuta dentro do venv, onde nbconvert e playwright existem.
+        os.execv(str(executavel), [str(executavel), os.path.abspath(__file__), *sys.argv[1:]])
+
+    alvos = list(notebooks(args.entradas))
+    if not alvos:
+        sys.exit('nenhum notebook encontrado')
+
+    for nb in alvos:
+        destino = pathlib.Path(args.out).expanduser().resolve() if args.out else nb.parent
+        destino.mkdir(parents=True, exist_ok=True)
+        pdf = gerar(nb, destino, 'portrait' if args.retrato else 'landscape',
+                    args.sem_codigo, args.escala)
+        print(f'{pdf}  ({pdf.stat().st_size // 1024} KB)')
+        if args.abrir:
+            subprocess.Popen(['xdg-open', str(pdf)],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+if __name__ == '__main__':
+    main()
