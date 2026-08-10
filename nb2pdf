@@ -4,25 +4,33 @@
     nb2pdf caderno.ipynb                 # PDF ao lado do notebook
     nb2pdf pasta/                        # todos os .ipynb da pasta
     nb2pdf *.ipynb --out ~/entregas      # destino próprio
+    nb2pdf caderno.ipynb --abrir         # abre o PDF ao terminar
     nb2pdf caderno.ipynb --sem-codigo    # só texto e resultados
     nb2pdf caderno.ipynb --retrato       # A4 em pé
-    nb2pdf caderno.ipynb --abrir         # abre o PDF ao terminar
 
 Imprime as saídas já salvas no arquivo; não executa nada. Se o notebook
 estiver sem saídas, rode-o antes (jupyter nbconvert --execute --inplace).
 
-As dependências ficam num venv próprio em ~/.local/share/nb2pdf, criado na
-primeira execução.
+As dependências vão para um ambiente temporário, apagado assim que o PDF fica
+pronto. Com --manter, o ambiente fica em ~/.local/share/nb2pdf e é reaproveitado
+nas próximas execuções, o que troca 190 MB de disco por uns 20 segundos a menos
+por execução. O navegador usado para imprimir fica no cache padrão do Playwright;
+`nb2pdf --limpar` mostra como removê-lo.
 """
 import argparse
+import atexit
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
+import tempfile
 
-VENV = pathlib.Path.home() / '.local/share/nb2pdf/venv'
+AMBIENTE = pathlib.Path.home() / '.local/share/nb2pdf/venv'
+NAVEGADORES = pathlib.Path.home() / '.cache/ms-playwright'
 PACOTES = ['nbconvert', 'playwright']
+VAR_EFEMERO = 'NB2PDF_EFEMERO'
 
 # Paisagem porque tabela larga de DataFrame corta na direita em retrato.
 # A escala de 0.8 no page.pdf() dá a folga restante.
@@ -47,18 +55,52 @@ RODAPE = """
 """
 
 
-def python_do_venv():
-    """Devolve o interpretador do venv, criando-o na primeira execução."""
-    executavel = VENV / 'bin/python'
-    if executavel.exists():
-        return executavel
+def tamanho(caminho):
+    if not caminho.exists():
+        return '0 MB'
+    total = sum(f.stat().st_size for f in caminho.rglob('*') if f.is_file())
+    return f'{total // 1024 // 1024} MB'
 
-    print(f'Primeira execução: montando o venv em {VENV}', file=sys.stderr)
-    VENV.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run([sys.executable, '-m', 'venv', str(VENV)], check=True)
-    subprocess.run([executavel, '-m', 'pip', 'install', '-q', *PACOTES], check=True)
-    subprocess.run([VENV / 'bin/playwright', 'install', 'chromium'], check=True)
-    return executavel
+
+def montar_ambiente(raiz):
+    """Cria o venv em `raiz` e baixa só o navegador que a impressão usa."""
+    subprocess.run([sys.executable, '-m', 'venv', str(raiz)], check=True)
+    subprocess.run([raiz / 'bin/python', '-m', 'pip', 'install', '-q', *PACOTES], check=True)
+    # chromium-headless-shell (262 MB) em vez de chromium (mais 389 MB que
+    # nunca seriam abertos): page.pdf() roda no shell.
+    subprocess.run([raiz / 'bin/playwright', 'install', 'chromium-headless-shell'], check=True)
+
+
+def entrar_no_ambiente(manter):
+    """Garante um ambiente utilizável e reexecuta o script dentro dele."""
+    if sys.prefix.endswith('nb2pdf-venv') or pathlib.Path(sys.prefix) == AMBIENTE:
+        return
+
+    if AMBIENTE.exists():
+        raiz, efemero = AMBIENTE, None
+    elif manter:
+        print(f'Montando o ambiente fixo em {AMBIENTE}', file=sys.stderr)
+        AMBIENTE.parent.mkdir(parents=True, exist_ok=True)
+        montar_ambiente(AMBIENTE)
+        raiz, efemero = AMBIENTE, None
+    else:
+        print('Montando ambiente temporário (some ao final)...', file=sys.stderr)
+        temporario = pathlib.Path(tempfile.mkdtemp(prefix='nb2pdf-'))
+        raiz = temporario / 'nb2pdf-venv'
+        montar_ambiente(raiz)
+        efemero = temporario
+
+    ambiente = dict(os.environ)
+    if efemero:
+        ambiente[VAR_EFEMERO] = str(efemero)
+    os.execve(str(raiz / 'bin/python'),
+              [str(raiz / 'bin/python'), os.path.abspath(__file__), *sys.argv[1:]], ambiente)
+
+
+def apagar_efemero():
+    alvo = os.environ.get(VAR_EFEMERO)
+    if alvo:
+        shutil.rmtree(alvo, ignore_errors=True)
 
 
 def notebooks(entradas):
@@ -85,8 +127,9 @@ def titulo_do_notebook(nb):
 def gerar(nb, destino, orientacao, sem_codigo, escala):
     from playwright.sync_api import sync_playwright
 
+    venv = pathlib.Path(sys.prefix)
     html = destino / f'{nb.stem}.nb2pdf.html'
-    comando = [VENV / 'bin/jupyter', 'nbconvert', '--to', 'html', '--embed-images',
+    comando = [venv / 'bin/jupyter', 'nbconvert', '--to', 'html', '--embed-images',
                '--output', html.name, '--output-dir', str(destino), str(nb)]
     if sem_codigo:
         comando.append('--no-input')
@@ -113,21 +156,45 @@ def gerar(nb, destino, orientacao, sem_codigo, escala):
     return pdf
 
 
+def limpar():
+    fixo = AMBIENTE.parent
+    if fixo.exists():
+        espaco = tamanho(fixo)
+        shutil.rmtree(fixo)
+        print(f'removido: {fixo} ({espaco})')
+    else:
+        print('nenhum ambiente fixo para remover')
+
+    if NAVEGADORES.exists():
+        print(f'\nO navegador da impressão fica em {NAVEGADORES} ({tamanho(NAVEGADORES)}).')
+        print('Ele é compartilhado com qualquer outra ferramenta que use Playwright,')
+        print('por isso não é apagado aqui. Para removê-lo:')
+        print(f'    rm -rf {NAVEGADORES}')
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('entradas', nargs='+', help='notebooks ou pastas')
+    ap.add_argument('entradas', nargs='*', help='notebooks ou pastas')
     ap.add_argument('--out', help='pasta de destino (padrão: ao lado do notebook)')
     ap.add_argument('--retrato', action='store_true', help='A4 em pé em vez de deitado')
     ap.add_argument('--sem-codigo', action='store_true', help='esconde as células de código')
     ap.add_argument('--escala', type=float, default=0.8, help='escala da impressão (padrão 0.8)')
     ap.add_argument('--abrir', action='store_true', help='abre o PDF no visualizador ao terminar')
+    ap.add_argument('--manter', action='store_true',
+                    help='guarda o ambiente em ~/.local/share/nb2pdf em vez de apagá-lo')
+    ap.add_argument('--limpar', action='store_true',
+                    help='remove o ambiente guardado e mostra como apagar o navegador')
     args = ap.parse_args()
 
-    executavel = python_do_venv()
-    if sys.prefix != str(VENV):
-        # Reexecuta dentro do venv, onde nbconvert e playwright existem.
-        os.execv(str(executavel), [str(executavel), os.path.abspath(__file__), *sys.argv[1:]])
+    if args.limpar:
+        limpar()
+        return
+    if not args.entradas:
+        ap.error('informe ao menos um notebook ou pasta')
+
+    entrar_no_ambiente(args.manter)
+    atexit.register(apagar_efemero)
 
     alvos = list(notebooks(args.entradas))
     if not alvos:

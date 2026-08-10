@@ -23,10 +23,7 @@ curl -fsSLo ~/.local/bin/nb2pdf https://raw.githubusercontent.com/FelipeArtur/nb
 chmod +x ~/.local/bin/nb2pdf
 ```
 
-É um arquivo só. Na primeira execução ele monta o próprio ambiente em
-`~/.local/share/nb2pdf` com `nbconvert`, `playwright` e o Chromium, o que leva
-cerca de um minuto. Depois disso a conversão é instantânea e nada é instalado no
-Python do sistema.
+É um arquivo só, e nada é instalado no Python do sistema.
 
 Requisitos: Python 3.9 ou mais novo e `~/.local/bin` no `PATH`.
 
@@ -40,7 +37,30 @@ nb2pdf caderno.ipynb --abrir         # abre o PDF ao terminar
 nb2pdf caderno.ipynb --sem-codigo    # só texto e resultados
 nb2pdf caderno.ipynb --retrato       # A4 em pé
 nb2pdf caderno.ipynb --escala 0.7    # aperta mais, para tabela muito larga
+nb2pdf caderno.ipynb --manter        # guarda o ambiente, execuções seguintes ficam rápidas
+nb2pdf --limpar                      # remove o ambiente guardado
 ```
+
+## Espaço em disco
+
+O `nb2pdf` precisa de `nbconvert`, do pacote `playwright` e de um navegador para
+imprimir. Por padrão, o ambiente com as duas primeiras peças é montado em uma
+pasta temporária e **apagado assim que o PDF fica pronto**, mesmo que a conversão
+falhe no meio. Nada fica parado no seu disco entre uma conversão e outra.
+
+| | disco | tempo por execução |
+|---|---|---|
+| Padrão (ambiente temporário) | nada permanece | ~15 s |
+| `--manter` | 187 MB em `~/.local/share/nb2pdf` | ~5 s |
+
+O navegador é a exceção: são 262 MB que ficam em `~/.cache/ms-playwright`, o
+cache padrão do Playwright, compartilhado com qualquer outra ferramenta que o
+use. Apagá-lo a cada execução significaria baixar 262 MB toda vez que você
+quisesse um PDF. O `nb2pdf --limpar` remove o ambiente guardado e mostra o
+comando para apagar o navegador também, quando você não for mais converter nada.
+
+Só o `chromium-headless-shell` é baixado, e não o pacote `chromium` completo, que
+custaria 389 MB a mais sem nunca ser aberto.
 
 ## O que ele faz com o layout
 
