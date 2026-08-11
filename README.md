@@ -1,89 +1,80 @@
-# nb2pdf
+<img src="logo.png" alt="" width="96" align="right">
 
-Converte notebook Jupyter, ou HTML pronto, em PDF paginado, direto do terminal,
+# paginar
+
+Converte notebook Jupyter, ou HTML pronto, em PDF paginado direto do terminal,
 sem LaTeX e sem passar pela impressão do Colab.
-
-![Página de exemplo](exemplo/pagina-exemplo.png)
 
 ## Por que
 
-Imprimir notebook pelo navegador quase sempre corta tabela larga na margem
-direita, parte figura no meio da página e não numera folha. Exportar por LaTeX
-resolve, mas exige uma instalação de TeX inteira só para isso.
+Imprimir notebook pelo navegador corta tabela larga na margem direita, parte
+figura no meio da página e não numera folha. Exportar por LaTeX resolve, mas
+pede uma instalação de TeX inteira só para isso.
 
-O `nb2pdf` renderiza o notebook em HTML, injeta um CSS de impressão e manda o
+O `paginar` renderiza o notebook em HTML, injeta um CSS de impressão e manda o
 Chromium do Playwright imprimir. A folha sai em A4 deitado, a tabela cabe, a
 figura não se parte e o rodapé traz título e número da página.
-
-## Dois modos, e a diferença importa
-
-**Notebook é matéria-prima.** É convertido, recebe o CSS de impressão, ganha
-margem e sai com rodapé de título e número de página.
-
-**HTML é documento acabado, e entra como está.** Sem conversão, sem CSS
-injetado, sem margem imposta e sem rodapé, porque quem escreveu o HTML já
-decidiu `@page`, margem e escala. Rodapé sobreposto a isso cairia por cima do
-texto: ele é desenhado justamente na faixa de margem, que aqui é do documento.
-
-```sh
-nb2pdf curriculo.html --retrato --escala 1
-```
-
-O caso que motivou o modo foi um currículo de uma folha, com `@page A4` e margem
-próprias, que precisa sair em PDF idêntico ao que o navegador mostra. Serve para
-qualquer HTML pensado para impressão.
-
-Pasta rende só os `.ipynb`. HTML entra quando você o nomeia, nunca por
-varredura: diretório de notebook costuma ter HTML de sobra, inclusive o que o
-próprio nbconvert deixa, e varrer viraria lixo em PDF sem ninguém pedir.
 
 ## Instalação
 
 ```sh
 mkdir -p ~/.local/bin
-curl -fsSLo ~/.local/bin/nb2pdf https://raw.githubusercontent.com/FelipeArtur/nb2pdf/main/nb2pdf
-chmod +x ~/.local/bin/nb2pdf
+curl -fsSLo ~/.local/bin/paginar https://raw.githubusercontent.com/FelipeArtur/paginar/main/paginar
+chmod +x ~/.local/bin/paginar
 ```
 
-É um arquivo só, e nada é instalado no Python do sistema.
-
-Requisitos: Python 3.9 ou mais novo e `~/.local/bin` no `PATH`.
+É um arquivo só, e nada é instalado no Python do sistema. Precisa de Python 3.9
+ou mais novo e de `~/.local/bin` no `PATH`.
 
 ## Uso
 
 ```sh
-nb2pdf caderno.ipynb                 # PDF ao lado do notebook
-nb2pdf pasta/                        # todos os .ipynb da pasta
-nb2pdf *.ipynb --out ~/entregas      # destino próprio
-nb2pdf caderno.ipynb --abrir         # abre o PDF ao terminar
-nb2pdf caderno.ipynb --sem-codigo    # só texto e resultados
-nb2pdf caderno.ipynb --retrato       # A4 em pé
-nb2pdf caderno.ipynb --escala 0.7    # aperta mais, para tabela muito larga
-nb2pdf pagina.html --retrato --escala 1   # HTML pronto, do jeito que está
-nb2pdf caderno.ipynb --manter        # guarda o ambiente, execuções seguintes ficam rápidas
-nb2pdf --limpar                      # remove o ambiente guardado
+paginar caderno.ipynb          # PDF ao lado do notebook
+paginar pasta/                 # todos os .ipynb da pasta
+paginar *.ipynb                # vários de uma vez
+paginar caderno.ipynb --retrato
+paginar caderno.ipynb --sem-codigo   # só texto e resultados
+paginar curriculo.html         # HTML pronto, impresso como está
 ```
+
+O PDF sai sempre ao lado do arquivo de entrada. Para mandar em outro lugar ou
+abrir o resultado, `mv` e `xdg-open` já fazem o serviço.
+
+## Notebook e HTML seguem caminhos diferentes
+
+Notebook é matéria-prima: é convertido, recebe o CSS de impressão, ganha margem
+e sai com rodapé de título e número de página, em A4 deitado com escala 0,8.
+
+HTML é documento acabado e entra como está, sem conversão, sem CSS injetado e
+sem rodapé, porque quem escreveu já decidiu `@page`, margem e escala. O rodapé
+é desenhado justamente na faixa de margem, que nesse caso pertence ao
+documento, então ele cairia por cima do texto. O caso que motivou esse modo foi
+um currículo de uma folha que precisa sair idêntico ao que o navegador mostra.
+
+Pasta rende só os `.ipynb`. HTML entra quando você o nomeia, nunca por
+varredura: diretório de notebook costuma ter HTML de sobra, inclusive o que o
+próprio nbconvert deixa.
 
 ## Espaço em disco
 
-O `nb2pdf` precisa de `nbconvert`, do pacote `playwright` e de um navegador para
-imprimir. Por padrão, o ambiente com as duas primeiras peças é montado em uma
-pasta temporária e **apagado assim que o PDF fica pronto**, mesmo que a conversão
-falhe no meio. Nada fica parado no seu disco entre uma conversão e outra.
+As dependências (`nbconvert` e `playwright`) vão para um venv temporário que é
+apagado no fim da execução, mesmo se a conversão falhar no meio. Isso custa uns
+15 segundos por PDF e não deixa nada parado no disco.
 
-| | disco | tempo por execução |
-|---|---|---|
-| Padrão (ambiente temporário) | nada permanece | ~15 s |
-| `--manter` | 187 MB em `~/.local/share/nb2pdf` | ~5 s |
+A exceção é o navegador: 262 MB em `~/.cache/ms-playwright`, o cache padrão do
+Playwright, compartilhado com qualquer outra ferramenta que o use. Baixar isso
+a cada conversão não faria sentido. Para removê-lo quando não for mais
+converter nada:
 
-O navegador é a exceção: são 262 MB que ficam em `~/.cache/ms-playwright`, o
-cache padrão do Playwright, compartilhado com qualquer outra ferramenta que o
-use. Apagá-lo a cada execução significaria baixar 262 MB toda vez que você
-quisesse um PDF. O `nb2pdf --limpar` remove o ambiente guardado e mostra o
-comando para apagar o navegador também, quando você não for mais converter nada.
+```sh
+rm -rf ~/.cache/ms-playwright
+```
 
-Só o `chromium-headless-shell` é baixado, e não o pacote `chromium` completo, que
-custaria 389 MB a mais sem nunca ser aberto.
+Só o `chromium-headless-shell` é baixado, e não o pacote `chromium` completo,
+que custaria 389 MB a mais sem nunca ser aberto.
+
+Se o Python que você usa já tiver `nbconvert` e `playwright` instalados, o
+`paginar` usa esse ambiente e não monta venv nenhum.
 
 ## O que ele faz com o layout
 
@@ -98,27 +89,29 @@ custaria 389 MB a mais sem nunca ser aberto.
 ## O que ele não faz
 
 Não executa o notebook. Ele imprime as saídas que já estão salvas no `.ipynb`,
-que é o que você vê ao abrir o arquivo. Se as saídas estiverem vazias ou
-desatualizadas, rode antes:
+que é o que você vê ao abrir o arquivo. Se estiverem vazias ou desatualizadas,
+rode antes:
 
 ```sh
 jupyter nbconvert --to notebook --execute --inplace caderno.ipynb
 ```
 
-A execução fica de fora de propósito: ela precisaria das dependências do seu
-notebook (`pandas`, `scipy`, o que for), e o ambiente do `nb2pdf` só carrega o
+A execução fica de fora de propósito: precisaria das dependências do seu
+notebook (`pandas`, `scipy`, o que for), e o ambiente do `paginar` só carrega o
 necessário para imprimir.
 
 ## Exemplo
 
-`exemplo/relatorio-exemplo.ipynb` gera dados sintéticos, monta uma tabela de sete
-colunas e dois gráficos. O PDF correspondente está em
-`exemplo/relatorio-exemplo.pdf`, e a imagem do topo deste README é a segunda
-página dele.
+`exemplo/relatorio-exemplo.ipynb` gera dados sintéticos, monta uma tabela de
+sete colunas e dois gráficos.
 
 ```sh
-nb2pdf exemplo/relatorio-exemplo.ipynb --abrir
+paginar exemplo/relatorio-exemplo.ipynb
 ```
+
+Abaixo, a segunda página do PDF que sai daí:
+
+![Página de exemplo](exemplo/pagina-exemplo.png)
 
 ## Licença
 

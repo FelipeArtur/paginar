@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""paginar — notebook Jupyter ou HTML pronto em PDF paginado, sem LaTeX.
+
+    paginar caderno.ipynb          # PDF ao lado do notebook
+    paginar pasta/                 # todos os .ipynb da pasta
+    paginar caderno.ipynb --retrato
+    paginar caderno.ipynb --sem-codigo
+    paginar curriculo.html         # HTML impresso como está
+
+Imprime as saídas já salvas no arquivo; não executa nada. Se o notebook estiver
+sem saídas, rode antes: jupyter nbconvert --to notebook --execute --inplace.
+
+Notebook é convertido, recebe um CSS de impressão e sai com margem e rodapé.
+HTML entra sem conversão e sem CSS injetado: quem o escreveu já decidiu `@page`
+e margem, e um rodapé desenhado por cima disso cobriria o conteúdo.
+
+As dependências vão para um venv temporário, apagado no fim da execução. Só o
+navegador fica, no cache do Playwright (~/.cache/ms-playwright), porque baixar
+262 MB a cada PDF não faria sentido.
+"""
+import argparse
+import importlib.util
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import tempfile
+
+PACOTES = ['nbconvert', 'playwright']
+
+# Paisagem porque tabela larga de DataFrame corta na direita em retrato.
+# A escala de 0.8 no page.pdf() dá a folga restante.
+CSS = """
+<style>
+@page {{ size: A4 {orientacao}; }}
+body {{ max-width: none !important; }}
+.jp-Notebook {{ padding: 0 !important; }}
+.jp-InputArea, .jp-OutputArea-child {{ break-inside: avoid-page; }}
+h1, h2, h3 {{ break-after: avoid-page; }}
+.jp-RenderedImage img {{ max-width: 100% !important; height: auto !important; }}
+table {{ font-size: 0.82em; }}
+pre, code {{ font-size: 0.85em; }}
+</style>
+"""
+
+RODAPE = """
+<div style="width:100%;font-size:8px;color:#666;padding:0 14mm;
+            font-family:system-ui,sans-serif;display:flex;justify-content:space-between;">
+  <span>{titulo}</span><span class="pageNumber"></span>
+</div>
+"""
+
+
+def reexecutar():
+    """Monta um venv temporário, roda o script dentro dele e apaga o venv."""
+    print('montando ambiente temporário (some ao final)...', file=sys.stderr)
+    with tempfile.TemporaryDirectory(prefix='paginar-') as tmp:
+        venv = pathlib.Path(tmp) / 'venv'
+        subprocess.run([sys.executable, '-m', 'venv', str(venv)], check=True)
+        subprocess.run([venv / 'bin/pip', 'install', '-q', *PACOTES], check=True)
+        # chromium-headless-shell (262 MB) em vez de chromium (mais 389 MB que
+        # nunca seriam abertos): page.pdf() roda no shell.
+        subprocess.run([venv / 'bin/playwright', 'install', 'chromium-headless-shell'],
+                       check=True)
+        script = os.path.abspath(__file__)
+        return subprocess.run([venv / 'bin/python', script, *sys.argv[1:]]).returncode
+
+
+def arquivos(entradas):
+    """Notebooks e HTMLs a imprimir.
+
+    Pasta rende só os `.ipynb`. HTML entra quando nomeado, e não por varredura:
+    diretório de notebook costuma ter HTML de sobra (o próprio nbconvert deixa),
+    e varrer transformaria lixo em PDF sem ninguém pedir.
+    """
+    for entrada in entradas:
+        caminho = pathlib.Path(entrada).expanduser().resolve()
+        if caminho.is_dir():
+            yield from sorted(caminho.glob('*.ipynb'))
+        elif caminho.suffix in ('.ipynb', '.html'):
+            yield caminho
+        else:
+            print(f'ignorado (não é notebook nem HTML): {caminho}', file=sys.stderr)
+
+
+def titulo_do_notebook(nb):
+    """Primeiro título de nível 1 do notebook; sem ele, o nome do arquivo."""
+    for celula in json.loads(nb.read_text())['cells']:
+        if celula['cell_type'] == 'markdown':
+            for linha in celula['source']:
+                if linha.startswith('# '):
+                    return linha[2:].strip()
+    return nb.stem.replace('-', ' ')
+
+
+def gerar(entrada, orientacao, sem_codigo):
+    from playwright.sync_api import sync_playwright
+
+    destino = entrada.parent
+    if entrada.suffix == '.html':
+        # O documento manda: sem margem, sem rodapé, escala 1.
+        html, temporario = entrada, False
+        extras = {'scale': 1, 'margin': dict.fromkeys(('top', 'bottom', 'left', 'right'), '0')}
+    else:
+        html, temporario = destino / f'{entrada.stem}.paginar.html', True
+        comando = [sys.executable, '-m', 'nbconvert', '--to', 'html', '--embed-images',
+                   '--output', html.name, '--output-dir', str(destino), str(entrada)]
+        if sem_codigo:
+            comando.append('--no-input')
+        subprocess.run(comando, check=True, capture_output=True)
+
+        html.write_text(html.read_text().replace(
+            '</head>', CSS.format(orientacao=orientacao) + '</head>', 1))
+        extras = {
+            'scale': 0.8,
+            'display_header_footer': True,
+            'header_template': '<span></span>',
+            'footer_template': RODAPE.format(titulo=titulo_do_notebook(entrada)),
+            'margin': {'top': '10mm', 'bottom': '12mm', 'left': '12mm', 'right': '12mm'},
+        }
+
+    pdf = destino / f'{entrada.stem}.pdf'
+    try:
+        with sync_playwright() as p:
+            navegador = p.chromium.launch()
+            pagina = navegador.new_page()
+            pagina.goto(html.as_uri(), wait_until='networkidle')
+            pagina.pdf(path=str(pdf), prefer_css_page_size=True, print_background=True, **extras)
+            navegador.close()
+    finally:
+        if temporario:
+            html.unlink(missing_ok=True)
+
+    return pdf
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('entradas', nargs='+', help='notebooks, HTMLs ou pastas')
+    ap.add_argument('--retrato', action='store_true', help='A4 em pé em vez de deitado')
+    ap.add_argument('--sem-codigo', action='store_true', help='esconde as células de código')
+    args = ap.parse_args()
+
+    alvos = list(arquivos(args.entradas))
+    if not alvos:
+        sys.exit('nenhum notebook nem HTML encontrado')
+
+    if not all(importlib.util.find_spec(p) for p in PACOTES):
+        sys.exit(reexecutar())
+
+    for alvo in alvos:
+        pdf = gerar(alvo, 'portrait' if args.retrato else 'landscape', args.sem_codigo)
+        print(f'{pdf}  ({pdf.stat().st_size // 1024} KB)')
+
+
+if __name__ == '__main__':
+    main()
