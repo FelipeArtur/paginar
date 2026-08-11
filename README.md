@@ -109,7 +109,10 @@ sete colunas e dois gráficos.
 paginar exemplo/relatorio-exemplo.ipynb
 ```
 
-Abaixo, a segunda página do PDF que sai daí:
+O resultado está versionado em
+[`exemplo/relatorio-exemplo.pdf`](exemplo/relatorio-exemplo.pdf): três folhas
+A4 deitadas, com rodapé e numeração. Abre antes de instalar qualquer coisa e
+mostra exatamente o que a ferramenta entrega. Abaixo, a segunda página dele:
 
 ![Página de exemplo](exemplo/pagina-exemplo.png)
 
