@@ -3,13 +3,15 @@
 # paginar
 
 Converte notebook Jupyter, ou HTML pronto, em PDF paginado direto do terminal,
-sem LaTeX e sem passar pela impressão do Colab.
+sem LaTeX e sem depender do Ctrl-P do navegador.
 
 ## Por que
 
-Imprimir notebook pelo navegador corta tabela larga na margem direita, parte
-figura no meio da página e não numera folha. Exportar por LaTeX resolve, mas
-pede uma instalação de TeX inteira só para isso.
+O Ctrl-P corta tabela larga na margem direita, parte figura no meio da página e
+não numera folha. Vale para o Colab, para o Jupyter Lab, para o notebook aberto
+no VS Code e para qualquer outro que termine no diálogo de impressão do
+Chromium sem CSS de página. Exportar por LaTeX resolve, mas pede uma instalação
+de TeX inteira só para isso.
 
 O `paginar` renderiza o notebook em HTML, injeta um CSS de impressão e manda o
 Chromium do Playwright imprimir. A folha sai em A4 deitado, a tabela cabe, a
