@@ -1,7 +1,7 @@
 # nb2pdf
 
-Converte notebook Jupyter em PDF paginado, direto do terminal, sem LaTeX e sem
-passar pela impressão do Colab.
+Converte notebook Jupyter, ou HTML pronto, em PDF paginado, direto do terminal,
+sem LaTeX e sem passar pela impressão do Colab.
 
 ![Página de exemplo](exemplo/pagina-exemplo.png)
 
@@ -14,6 +14,28 @@ resolve, mas exige uma instalação de TeX inteira só para isso.
 O `nb2pdf` renderiza o notebook em HTML, injeta um CSS de impressão e manda o
 Chromium do Playwright imprimir. A folha sai em A4 deitado, a tabela cabe, a
 figura não se parte e o rodapé traz título e número da página.
+
+## Dois modos, e a diferença importa
+
+**Notebook é matéria-prima.** É convertido, recebe o CSS de impressão, ganha
+margem e sai com rodapé de título e número de página.
+
+**HTML é documento acabado, e entra como está.** Sem conversão, sem CSS
+injetado, sem margem imposta e sem rodapé, porque quem escreveu o HTML já
+decidiu `@page`, margem e escala. Rodapé sobreposto a isso cairia por cima do
+texto: ele é desenhado justamente na faixa de margem, que aqui é do documento.
+
+```sh
+nb2pdf curriculo.html --retrato --escala 1
+```
+
+O caso que motivou o modo foi um currículo de uma folha, com `@page A4` e margem
+próprias, que precisa sair em PDF idêntico ao que o navegador mostra. Serve para
+qualquer HTML pensado para impressão.
+
+Pasta rende só os `.ipynb`. HTML entra quando você o nomeia, nunca por
+varredura: diretório de notebook costuma ter HTML de sobra, inclusive o que o
+próprio nbconvert deixa, e varrer viraria lixo em PDF sem ninguém pedir.
 
 ## Instalação
 
@@ -37,6 +59,7 @@ nb2pdf caderno.ipynb --abrir         # abre o PDF ao terminar
 nb2pdf caderno.ipynb --sem-codigo    # só texto e resultados
 nb2pdf caderno.ipynb --retrato       # A4 em pé
 nb2pdf caderno.ipynb --escala 0.7    # aperta mais, para tabela muito larga
+nb2pdf pagina.html --retrato --escala 1   # HTML pronto, do jeito que está
 nb2pdf caderno.ipynb --manter        # guarda o ambiente, execuções seguintes ficam rápidas
 nb2pdf --limpar                      # remove o ambiente guardado
 ```

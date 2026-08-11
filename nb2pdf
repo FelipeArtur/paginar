@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""nb2pdf — notebook Jupyter para PDF paginado, sem passar pelo Colab.
+"""nb2pdf — notebook Jupyter ou HTML para PDF paginado, sem passar pelo Colab.
 
     nb2pdf caderno.ipynb                 # PDF ao lado do notebook
     nb2pdf pasta/                        # todos os .ipynb da pasta
@@ -7,9 +7,16 @@
     nb2pdf caderno.ipynb --abrir         # abre o PDF ao terminar
     nb2pdf caderno.ipynb --sem-codigo    # só texto e resultados
     nb2pdf caderno.ipynb --retrato       # A4 em pé
+    nb2pdf pagina.html --escala 1        # HTML pronto, do jeito que está
 
 Imprime as saídas já salvas no arquivo; não executa nada. Se o notebook
 estiver sem saídas, rode-o antes (jupyter nbconvert --execute --inplace).
+
+Notebook e HTML seguem caminhos diferentes de propósito. Notebook é convertido,
+recebe um CSS de impressão e ganha margem e rodapé com título e número de
+página. HTML já é o documento final: entra sem conversão, sem CSS injetado, sem
+margem imposta e sem rodapé, porque quem o escreveu já decidiu `@page` e
+margem, e um rodapé desenhado por cima disso sobreporia o conteúdo.
 
 As dependências vão para um ambiente temporário, apagado assim que o PDF fica
 pronto. Com --manter, o ambiente fica em ~/.local/share/nb2pdf e é reaproveitado
@@ -103,15 +110,21 @@ def apagar_efemero():
         shutil.rmtree(alvo, ignore_errors=True)
 
 
-def notebooks(entradas):
+def arquivos(entradas):
+    """Notebooks e HTMLs a imprimir.
+
+    Pasta rende só os `.ipynb`. HTML entra quando nomeado, e não por varredura:
+    diretório de notebook costuma ter HTML de sobra (o próprio nbconvert deixa),
+    e varrer transformaria lixo em PDF sem ninguém pedir.
+    """
     for entrada in entradas:
         caminho = pathlib.Path(entrada).expanduser().resolve()
         if caminho.is_dir():
             yield from sorted(caminho.glob('*.ipynb'))
-        elif caminho.suffix == '.ipynb':
+        elif caminho.suffix in ('.ipynb', '.html'):
             yield caminho
         else:
-            print(f'ignorado (não é notebook): {caminho}', file=sys.stderr)
+            print(f'ignorado (não é notebook nem HTML): {caminho}', file=sys.stderr)
 
 
 def titulo_do_notebook(nb):
@@ -124,34 +137,46 @@ def titulo_do_notebook(nb):
     return nb.stem.replace('-', ' ')
 
 
-def gerar(nb, destino, orientacao, sem_codigo, escala):
+def gerar(entrada, destino, orientacao, sem_codigo, escala):
     from playwright.sync_api import sync_playwright
 
-    venv = pathlib.Path(sys.prefix)
-    html = destino / f'{nb.stem}.nb2pdf.html'
-    comando = [venv / 'bin/jupyter', 'nbconvert', '--to', 'html', '--embed-images',
-               '--output', html.name, '--output-dir', str(destino), str(nb)]
-    if sem_codigo:
-        comando.append('--no-input')
-    subprocess.run(comando, check=True, capture_output=True)
+    if entrada.suffix == '.html':
+        # O documento manda. Sem conversão, sem CSS injetado, sem margem e sem
+        # rodapé: quem escreveu o HTML já decidiu `@page` e margem, e o rodapé
+        # do Playwright é desenhado na faixa de margem — com margem zero, ele
+        # sairia por cima do conteúdo.
+        html, temporario = entrada, False
+        extras = {'margin': dict.fromkeys(('top', 'bottom', 'left', 'right'), '0')}
+    else:
+        venv = pathlib.Path(sys.prefix)
+        html, temporario = destino / f'{entrada.stem}.nb2pdf.html', True
+        comando = [venv / 'bin/jupyter', 'nbconvert', '--to', 'html', '--embed-images',
+                   '--output', html.name, '--output-dir', str(destino), str(entrada)]
+        if sem_codigo:
+            comando.append('--no-input')
+        subprocess.run(comando, check=True, capture_output=True)
 
-    titulo = titulo_do_notebook(nb)
-    html.write_text(html.read_text().replace(
-        '</head>', CSS.format(orientacao=orientacao) + '</head>', 1))
+        html.write_text(html.read_text().replace(
+            '</head>', CSS.format(orientacao=orientacao) + '</head>', 1))
+        extras = {
+            'display_header_footer': True,
+            'header_template': '<span></span>',
+            'footer_template': RODAPE.format(titulo=titulo_do_notebook(entrada)),
+            'margin': {'top': '10mm', 'bottom': '12mm', 'left': '12mm', 'right': '12mm'},
+        }
 
-    pdf = destino / f'{nb.stem}.pdf'
+    pdf = destino / f'{entrada.stem}.pdf'
     try:
         with sync_playwright() as p:
             navegador = p.chromium.launch()
             pagina = navegador.new_page()
             pagina.goto(html.as_uri(), wait_until='networkidle')
             pagina.pdf(path=str(pdf), prefer_css_page_size=True, print_background=True,
-                       scale=escala, display_header_footer=True, header_template='<span></span>',
-                       footer_template=RODAPE.format(titulo=titulo),
-                       margin={'top': '10mm', 'bottom': '12mm', 'left': '12mm', 'right': '12mm'})
+                       scale=escala, **extras)
             navegador.close()
     finally:
-        html.unlink(missing_ok=True)
+        if temporario:
+            html.unlink(missing_ok=True)
 
     return pdf
 
@@ -175,7 +200,7 @@ def limpar():
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('entradas', nargs='*', help='notebooks ou pastas')
+    ap.add_argument('entradas', nargs='*', help='notebooks, HTMLs ou pastas')
     ap.add_argument('--out', help='pasta de destino (padrão: ao lado do notebook)')
     ap.add_argument('--retrato', action='store_true', help='A4 em pé em vez de deitado')
     ap.add_argument('--sem-codigo', action='store_true', help='esconde as células de código')
@@ -196,14 +221,14 @@ def main():
     entrar_no_ambiente(args.manter)
     atexit.register(apagar_efemero)
 
-    alvos = list(notebooks(args.entradas))
+    alvos = list(arquivos(args.entradas))
     if not alvos:
-        sys.exit('nenhum notebook encontrado')
+        sys.exit('nenhum notebook nem HTML encontrado')
 
-    for nb in alvos:
-        destino = pathlib.Path(args.out).expanduser().resolve() if args.out else nb.parent
+    for alvo in alvos:
+        destino = pathlib.Path(args.out).expanduser().resolve() if args.out else alvo.parent
         destino.mkdir(parents=True, exist_ok=True)
-        pdf = gerar(nb, destino, 'portrait' if args.retrato else 'landscape',
+        pdf = gerar(alvo, destino, 'portrait' if args.retrato else 'landscape',
                     args.sem_codigo, args.escala)
         print(f'{pdf}  ({pdf.stat().st_size // 1024} KB)')
         if args.abrir:
