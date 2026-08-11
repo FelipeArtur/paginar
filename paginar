@@ -85,10 +85,15 @@ def arquivos(entradas):
 
 
 def titulo_do_notebook(nb):
-    """Primeiro título de nível 1 do notebook; sem ele, o nome do arquivo."""
+    """Primeiro título de nível 1 do notebook; sem ele, o nome do arquivo.
+
+    O nbformat aceita `source` como lista de linhas ou como string única, e as
+    duas formas aparecem conforme quem salvou o arquivo. O join cobre as duas:
+    numa string, devolve a própria string.
+    """
     for celula in json.loads(nb.read_text())['cells']:
         if celula['cell_type'] == 'markdown':
-            for linha in celula['source']:
+            for linha in ''.join(celula['source']).splitlines():
                 if linha.startswith('# '):
                     return linha[2:].strip()
     return nb.stem.replace('-', ' ')
