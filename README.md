@@ -2,20 +2,24 @@
 
 # paginar
 
-Converte notebook Jupyter, ou HTML pronto, em PDF paginado direto do terminal,
-sem LaTeX e sem depender do Ctrl-P do navegador.
+Convert Jupyter notebooks and HTML files to paginated PDFs from the command
+line, without LaTeX.
 
-## Por que
+O `paginar` converte notebooks Jupyter e arquivos HTML prontos em PDFs pelo
+terminal. Para notebooks, aplica o layout de impressão sem depender do Ctrl-P
+do navegador.
 
-O Ctrl-P corta tabela larga na margem direita, parte figura no meio da página e
-não numera folha. Vale para o Colab, para o Jupyter Lab, para o notebook aberto
-no VS Code e para qualquer outro que termine no diálogo de impressão do
-Chromium sem CSS de página. Exportar por LaTeX resolve, mas pede uma instalação
-de TeX inteira só para isso.
+## Por que usar `paginar`
 
-O `paginar` renderiza o notebook em HTML, injeta um CSS de impressão e manda o
-Chromium do Playwright imprimir. A folha sai em A4 deitado, a tabela cabe, a
-figura não se parte e o rodapé traz título e número da página.
+O Ctrl-P pode cortar tabelas largas na margem direita, dividir figuras entre
+páginas e deixar o PDF sem numeração. Isso acontece no Colab, no JupyterLab, no
+VS Code e em outros ambientes que usam o diálogo de impressão do Chromium sem
+CSS de página. Exportar por LaTeX resolve, mas exige instalar um ambiente TeX
+inteiro para essa tarefa.
+
+O `paginar` converte o notebook em HTML, aplica CSS de impressão e usa o
+Chromium do Playwright para criar o PDF. A página fica em A4 paisagem, com
+tabelas e figuras protegidas contra quebras e título e número no rodapé.
 
 ## Instalação
 
@@ -25,8 +29,8 @@ curl -fsSLo ~/.local/bin/paginar https://raw.githubusercontent.com/FelipeArtur/p
 chmod +x ~/.local/bin/paginar
 ```
 
-É um arquivo só, e nada é instalado no Python do sistema. Precisa de Python 3.9
-ou mais novo e de `~/.local/bin` no `PATH`.
+É um único arquivo executável. As dependências não são instaladas no Python do
+sistema. Requer Python 3.9 ou mais novo e `~/.local/bin` no `PATH`.
 
 ## Uso
 
@@ -39,82 +43,78 @@ paginar caderno.ipynb --sem-codigo   # só texto e resultados
 paginar curriculo.html         # HTML pronto, impresso como está
 ```
 
-O PDF sai sempre ao lado do arquivo de entrada. Para mandar em outro lugar ou
-abrir o resultado, `mv` e `xdg-open` já fazem o serviço.
+O PDF sai ao lado do arquivo de entrada. Use `mv` para movê-lo ou `xdg-open`
+para abri-lo.
 
 ## Notebook e HTML seguem caminhos diferentes
 
-Notebook é matéria-prima: é convertido, recebe o CSS de impressão, ganha margem
-e sai com rodapé de título e número de página, em A4 deitado com escala 0,8.
+O notebook é convertido em HTML, recebe o CSS de impressão e sai em A4
+paisagem, com margens, escala 0,8 e rodapé com título e número da página.
 
-HTML é documento acabado e entra como está, sem conversão, sem CSS injetado e
-sem rodapé, porque quem escreveu já decidiu `@page`, margem e escala. O rodapé
-é desenhado justamente na faixa de margem, que nesse caso pertence ao
-documento, então ele cairia por cima do texto. O caso que motivou esse modo foi
-um currículo de uma folha que precisa sair idêntico ao que o navegador mostra.
+Arquivos HTML entram como estão, sem conversão, CSS extra ou rodapé. O próprio
+documento controla `@page`, as margens e a escala. Esse modo surgiu para
+imprimir um currículo de uma página igual ao que aparece no navegador.
 
-Pasta rende só os `.ipynb`. HTML entra quando você o nomeia, nunca por
-varredura: diretório de notebook costuma ter HTML de sobra, inclusive o que o
-próprio nbconvert deixa.
+Pastas são varridas apenas por arquivos `.ipynb`. Para imprimir HTML, informe o
+arquivo diretamente. Diretórios de notebooks costumam ter HTML incidental,
+inclusive arquivos criados pelo próprio nbconvert.
 
 ## Espaço em disco
 
-As dependências (`nbconvert` e `playwright`) vão para um venv temporário que é
-apagado no fim da execução, mesmo se a conversão falhar no meio. Isso custa uns
-15 segundos por PDF e não deixa nada parado no disco.
+As dependências (`nbconvert` e `playwright`) ficam num venv temporário, removido
+ao fim da execução mesmo se a conversão falhar. Criar esse ambiente costuma
+acrescentar cerca de 15 segundos à execução.
 
-A exceção é o navegador: 262 MB em `~/.cache/ms-playwright`, o cache padrão do
-Playwright, compartilhado com qualquer outra ferramenta que o use. Baixar isso
-a cada conversão não faria sentido. Para removê-lo quando não for mais
-converter nada:
+O navegador fica no cache padrão do Playwright, em `~/.cache/ms-playwright`, e
+pode ser compartilhado com outras ferramentas. O `chromium-headless-shell` usa
+cerca de 262 MB. Para liberar esse espaço:
 
 ```sh
 rm -rf ~/.cache/ms-playwright
 ```
 
-Só o `chromium-headless-shell` é baixado, e não o pacote `chromium` completo,
-que custaria 389 MB a mais sem nunca ser aberto.
+O `paginar` baixa apenas o `chromium-headless-shell`. O pacote `chromium`
+completo ocuparia mais 389 MB e não seria usado.
 
-Se o Python que você usa já tiver `nbconvert` e `playwright` instalados, o
-`paginar` usa esse ambiente e não monta venv nenhum.
+Se o Python selecionado já tiver `nbconvert` e `playwright`, o `paginar` usa
+esse ambiente e não cria um venv.
 
 ## O que ele faz com o layout
 
 - **A4 deitado com escala 0,8.** É o que faz caber uma tabela de dez ou mais
   colunas. Em retrato, `pandas` estoura a margem e o Chromium corta o resto.
-- **Não parte figura nem tabela.** Cada saída sai inteira em uma folha só, e
-  título não fica órfão no pé da página.
+- **Evita quebras em figuras e tabelas.** Títulos também permanecem junto ao
+  conteúdo.
 - **Rodapé com título e número da página.** O título vem do primeiro `#` do
   notebook, não do nome do arquivo.
 - **Imagens embutidas.** O PDF não depende de arquivo externo nem de rede.
 
 ## O que ele não faz
 
-Não executa o notebook. Ele imprime as saídas que já estão salvas no `.ipynb`,
-que é o que você vê ao abrir o arquivo. Se estiverem vazias ou desatualizadas,
-rode antes:
+O `paginar` não executa o notebook. Ele imprime as saídas salvas no `.ipynb`.
+Se estiverem vazias ou desatualizadas, rode antes:
 
 ```sh
 jupyter nbconvert --to notebook --execute --inplace caderno.ipynb
 ```
 
-A execução fica de fora de propósito: precisaria das dependências do seu
-notebook (`pandas`, `scipy`, o que for), e o ambiente do `paginar` só carrega o
-necessário para imprimir.
+A execução fica de fora porque depende das bibliotecas do notebook, como
+`pandas` ou `scipy`. O ambiente do `paginar` instala apenas o que precisa para
+imprimir.
 
 ## Exemplo
 
-`exemplo/relatorio-exemplo.ipynb` gera dados sintéticos, monta uma tabela de
-sete colunas e dois gráficos.
+`exemplo/relatorio-exemplo.ipynb` gera dados sintéticos, uma tabela de sete
+colunas e dois gráficos.
 
 ```sh
 paginar exemplo/relatorio-exemplo.ipynb
 ```
 
-O resultado está versionado em
+O PDF gerado está versionado em
 [`exemplo/relatorio-exemplo.pdf`](exemplo/relatorio-exemplo.pdf): três folhas
-A4 deitadas, com rodapé e numeração. Abre antes de instalar qualquer coisa e
-mostra exatamente o que a ferramenta entrega. Abaixo, a segunda página dele:
+A4 paisagem, com rodapé e numeração. Você pode abri-lo antes de instalar
+qualquer coisa para ver o resultado. Abaixo está a segunda página:
 
 ![Página de exemplo](exemplo/pagina-exemplo.png)
 
