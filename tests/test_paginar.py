@@ -1,6 +1,6 @@
 """Checagem do único trecho que já quebrou calado: a leitura do título.
 
-    python teste.py
+    python tests/test_paginar.py
 """
 import importlib.machinery
 import importlib.util
@@ -8,7 +8,8 @@ import json
 import pathlib
 import tempfile
 
-carregador = importlib.machinery.SourceFileLoader('paginar', str(pathlib.Path(__file__).parent / 'paginar'))
+carregador = importlib.machinery.SourceFileLoader(
+    'paginar', str(pathlib.Path(__file__).parent.parent / 'paginar'))
 spec = importlib.util.spec_from_loader('paginar', carregador)
 paginar = importlib.util.module_from_spec(spec)
 carregador.exec_module(paginar)
