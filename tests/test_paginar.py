@@ -60,7 +60,7 @@ with tempfile.TemporaryDirectory(prefix='paginar-testes-') as tmp:
     pdf = doc.with_suffix('.pdf')
     pdf.write_bytes(b'PDF anterior')
     try:
-        paginar.gerar(doc, 'landscape', False, Navegador())
+        paginar.gerar(doc, 'landscape', Navegador())
         raise AssertionError('a falha de impressão deveria propagar')
     except OSError:
         pass
@@ -68,6 +68,7 @@ with tempfile.TemporaryDirectory(prefix='paginar-testes-') as tmp:
     assert pagina.fechada and not list(pasta.glob('.paginar-*'))
 
     if '--integracao' in sys.argv:
+        shutil.copyfile(script.parent / 'exemplo/documento-exemplo.html', doc)
         exemplo = pasta / 'relatorio.ipynb'
         shutil.copyfile(script.parent / 'exemplo/relatorio-exemplo.ipynb', exemplo)
         quebrado = pasta / 'quebrado.ipynb'
@@ -80,6 +81,12 @@ with tempfile.TemporaryDirectory(prefix='paginar-testes-') as tmp:
         assert 'falha ao converter' in resultado.stderr
         for entrada in (doc, exemplo):
             assert entrada.with_suffix('.pdf').read_bytes().startswith(b'%PDF-')
+        if shutil.which('pdftotext'):
+            texto = subprocess.run(['pdftotext', str(exemplo.with_suffix('.pdf')), '-'],
+                                   check=True, capture_output=True, text=True).stdout
+            assert 'import numpy as np' not in texto
+            assert 'Out[1]:' not in texto and 'In [1]:' not in texto
+            assert '2025-01' in texto, 'os resultados salvos devem aparecer no PDF'
         assert quebrado.with_suffix('.pdf').read_bytes() == b'PDF preservado'
         assert not list(pasta.glob('.paginar-*'))
         print('integração: HTML e notebook gerados, falha isolada, temporários removidos')

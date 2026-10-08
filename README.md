@@ -15,11 +15,15 @@ Requer Linux, Python 3.9 ou mais novo e `curl`.
 
 ```sh
 mkdir -p ~/.local/bin
-curl -fsSLo ~/.local/bin/paginar https://raw.githubusercontent.com/FelipeArtur/paginar/main/paginar
-chmod +x ~/.local/bin/paginar
+paginar_download=$(mktemp ~/.local/bin/.paginar.XXXXXX)
+curl -fsSLo "$paginar_download" https://raw.githubusercontent.com/FelipeArtur/paginar/main/paginar &&
+chmod +x "$paginar_download" &&
+mv -f "$paginar_download" ~/.local/bin/paginar
 ```
 
 Inclua `~/.local/bin` no `PATH` do seu shell. Para atualizar, repita os comandos.
+O download substitui o executável depois de terminar, inclusive quando o caminho
+instalado é um link para um clone local.
 
 Na primeira conversão, o script instala as dependências em um ambiente Python
 isolado e baixa o Chromium headless. Esse preparo exige internet. As próximas
@@ -40,7 +44,8 @@ Cada PDF fica ao lado da entrada, com o mesmo nome e extensão `.pdf`.
 Uma pasta seleciona somente os notebooks `.ipynb` diretamente dentro dela.
 Para HTML, informe os arquivos ou use um glob como `*.html`.
 
-O lote compartilha um navegador. Se um arquivo falhar, o comando informa o
+O lote compartilha um navegador. Notebooks também compartilham um conversor
+nbconvert, carregado uma vez. Se um arquivo falhar, o comando informa o
 problema e continua com os demais. O código de saída é `1` quando alguma entrada
 ou conversão falha e `0` quando todas terminam. Entradas repetidas são processadas
 uma vez; documentos que gerariam o mesmo PDF são sinalizados como conflito.
@@ -93,19 +98,24 @@ falta, a mensagem de erro mostra o comando para baixá-lo.
 Temporários de conversão são removidos ao terminar. O ambiente Python e o
 navegador ficam disponíveis para outras execuções.
 
-## Usar um checkout ou submódulo
+## Usar um clone local
 
 O executável funciona direto do repositório:
 
 ```sh
-./paginar documento.html relatorio.ipynb
+git clone git@github.com:FelipeArtur/paginar.git
+cd paginar
+./paginar exemplo/documento-exemplo.html
+./paginar exemplo/relatorio-exemplo.ipynb
 ```
 
-Ao clonar um projeto que inclui `paginar` como submódulo, use
-`git clone --recurse-submodules` ou execute `git submodule update --init`
-no repositório principal. Ele registra a versão do `paginar` usada pelo projeto.
+O primeiro comando de conversão produz um PDF A4 em retrato. O segundo produz
+um relatório A4 em paisagem com as saídas salvas do notebook.
 
 ## Exemplo e verificação
+
+O [documento HTML](exemplo/documento-exemplo.html) tem texto e uma tabela, com
+papel e margens definidos em CSS.
 
 O [notebook de exemplo](exemplo/relatorio-exemplo.ipynb) contém dados sintéticos,
 uma tabela e dois gráficos. Veja o [PDF](exemplo/relatorio-exemplo.pdf):

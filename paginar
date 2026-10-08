@@ -114,7 +114,7 @@ def titulo_do_notebook(nb):
     return nb.stem.replace('-', ' ')
 
 
-def gerar(entrada, orientacao, sem_codigo, navegador):
+def gerar(entrada, orientacao, navegador, exportador=None):
     """Renderiza um documento; só substitui o PDF quando a impressão termina."""
     html, temporario, pagina, pdf_temporario = entrada, None, None, None
     pdf = entrada.with_suffix('.pdf')
@@ -123,12 +123,7 @@ def gerar(entrada, orientacao, sem_codigo, navegador):
             extras = {'scale': 1,
                       'margin': dict.fromkeys(('top', 'bottom', 'left', 'right'), '0')}
         else:
-            comando = [sys.executable, '-m', 'nbconvert', '--to', 'html',
-                       '--embed-images', '--stdout', str(entrada)]
-            if sem_codigo:
-                comando.append('--no-input')
-            conteudo = subprocess.run(comando, check=True, capture_output=True,
-                                      text=True).stdout
+            conteudo, _ = exportador.from_filename(str(entrada))
             with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8',
                     prefix='.paginar-', suffix='.paginar.html',
                     dir=entrada.parent, delete=False) as arquivo:
@@ -186,6 +181,13 @@ def main():
 
     from playwright.sync_api import Error, sync_playwright
 
+    exportador = None
+    if 'nbconvert' in pacotes:
+        from nbconvert import HTMLExporter
+        exportador = HTMLExporter(
+            embed_images=True, exclude_input=args.sem_codigo,
+            exclude_input_prompt=args.sem_codigo, exclude_output_prompt=args.sem_codigo)
+
     with sync_playwright() as p:
         try:
             navegador = p.chromium.launch()
@@ -198,12 +200,10 @@ def main():
             for alvo in alvos:
                 try:
                     pdf = gerar(alvo, 'portrait' if args.retrato else 'landscape',
-                                args.sem_codigo, navegador)
+                                navegador, exportador)
                     print(f'{pdf}  ({pdf.stat().st_size // 1024} KB)')
-                except (OSError, ValueError, KeyError, subprocess.CalledProcessError, Error) as erro:
-                    detalhe = (erro.stderr if isinstance(erro, subprocess.CalledProcessError)
-                               else str(erro))
-                    print(f'falha ao converter {alvo}: {detalhe}', file=sys.stderr)
+                except Exception as erro:
+                    print(f'falha ao converter {alvo}: {erro}', file=sys.stderr)
                     erros.append(str(alvo))
         finally:
             navegador.close()

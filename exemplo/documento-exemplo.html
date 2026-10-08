@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Documento de exemplo</title>
+  <style>
+    @page { size: A4 portrait; margin: 20mm; }
+    body { font-family: sans-serif; color: #203040; line-height: 1.5; }
+    h1 { color: #225588; font-size: 26pt; }
+    h2 { font-size: 15pt; margin-top: 24pt; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { padding: 8pt; border-bottom: 1px solid #ccd5dd; text-align: left; }
+    th { background: #eef3f7; }
+  </style>
+</head>
+<body>
+  <h1>Documento de exemplo</h1>
+  <p>Este HTML permite testar o paginar sem preparar um documento próprio.
+     O arquivo define papel A4 em retrato e margens de 20 mm.</p>
+  <h2>Entradas aceitas</h2>
+  <table>
+    <thead><tr><th>Documento</th><th>Conversão</th></tr></thead>
+    <tbody>
+      <tr><td>HTML</td><td>Usa o CSS do documento.</td></tr>
+      <tr><td>Notebook Jupyter</td><td>Imprime as saídas já salvas.</td></tr>
+    </tbody>
+  </table>
+  <h2>Uso em lote</h2>
+  <p>Informe vários arquivos no mesmo comando. Cada entrada gera um PDF
+     com o mesmo nome, na pasta do documento.</p>
+</body>
+</html>
