@@ -14,11 +14,12 @@ Notebook é convertido, recebe um CSS de impressão e sai com margem e rodapé.
 HTML entra sem conversão e sem CSS injetado: quem o escreveu já decidiu `@page`
 e margem, e um rodapé desenhado por cima disso cobriria o conteúdo.
 
-As dependências vão para um venv temporário, apagado no fim da execução. Só o
-navegador fica, no cache do Playwright (~/.cache/ms-playwright), porque baixar
-262 MB a cada PDF não faria sentido.
+As dependências ficam em um ambiente isolado no cache do usuário. A primeira
+execução prepara o ambiente; as seguintes reutilizam o que já foi instalado.
+Um único navegador atende todos os arquivos do lote.
 """
 import argparse
+from html import escape
 import importlib.util
 import json
 import os
@@ -26,8 +27,6 @@ import pathlib
 import subprocess
 import sys
 import tempfile
-
-PACOTES = ['nbconvert', 'playwright']
 
 # Paisagem porque tabela larga de DataFrame corta na direita em retrato.
 # A escala de 0.8 no page.pdf() dá a folga restante.
@@ -52,36 +51,52 @@ RODAPE = """
 """
 
 
-def reexecutar():
-    """Monta um venv temporário, roda o script dentro dele e apaga o venv."""
-    print('montando ambiente temporário (some ao final)...', file=sys.stderr)
-    with tempfile.TemporaryDirectory(prefix='paginar-') as tmp:
-        venv = pathlib.Path(tmp) / 'venv'
+def reexecutar(pacotes):
+    """Reutiliza um venv no cache e instala somente dependências ausentes."""
+    cache = pathlib.Path(os.environ.get('XDG_CACHE_HOME', pathlib.Path.home() / '.cache'))
+    venv = cache / 'paginar' / f'python{sys.version_info.major}.{sys.version_info.minor}'
+    python = venv / 'bin/python'
+    if not python.exists():
         subprocess.run([sys.executable, '-m', 'venv', str(venv)], check=True)
-        subprocess.run([venv / 'bin/pip', 'install', '-q', *PACOTES], check=True)
-        # chromium-headless-shell (262 MB) em vez de chromium (mais 389 MB que
-        # nunca seriam abertos): page.pdf() roda no shell.
-        subprocess.run([venv / 'bin/playwright', 'install', 'chromium-headless-shell'],
-                       check=True)
-        script = os.path.abspath(__file__)
-        return subprocess.run([venv / 'bin/python', script, *sys.argv[1:]]).returncode
+    consulta = ('import importlib.util, sys; '
+                'sys.exit(not importlib.util.find_spec(sys.argv[1]))')
+    faltam = [pacote for pacote in pacotes if subprocess.run(
+        [python, '-c', consulta, pacote], capture_output=True).returncode]
+    if faltam:
+        print('preparando ambiente isolado (reutilizado nas próximas execuções)...',
+              file=sys.stderr)
+        subprocess.run([python, '-m', 'pip', 'install', '-q', *faltam], check=True)
+        if 'playwright' in faltam:
+            subprocess.run([python, '-m', 'playwright', 'install', 'chromium-headless-shell'],
+                           check=True)
+    return subprocess.run([python, os.path.abspath(__file__), *sys.argv[1:]]).returncode
 
 
 def arquivos(entradas):
-    """Notebooks e HTMLs a imprimir.
-
-    Pasta rende só os `.ipynb`. HTML entra quando nomeado, e não por varredura:
-    diretório de notebook costuma ter HTML de sobra (o próprio nbconvert deixa),
-    e varrer transformaria lixo em PDF sem ninguém pedir.
-    """
+    """Valida entradas antes da conversão; pastas incluem somente notebooks."""
+    alvos, erros = [], []
     for entrada in entradas:
         caminho = pathlib.Path(entrada).expanduser().resolve()
         if caminho.is_dir():
-            yield from sorted(caminho.glob('*.ipynb'))
-        elif caminho.suffix in ('.ipynb', '.html'):
-            yield caminho
+            encontrados = sorted(caminho.glob('*.ipynb'))
+            if not encontrados:
+                erros.append(f'pasta sem notebooks: {caminho}')
+            alvos.extend(encontrados)
+        elif not caminho.is_file():
+            erros.append(f'arquivo não encontrado: {caminho}')
+        elif caminho.suffix.lower() in ('.ipynb', '.html'):
+            alvos.append(caminho)
         else:
-            print(f'ignorado (não é notebook nem HTML): {caminho}', file=sys.stderr)
+            erros.append(f'formato não aceito: {caminho}')
+    unicos, destinos = [], set()
+    for alvo in dict.fromkeys(alvos):
+        destino = alvo.with_suffix('.pdf')
+        if destino in destinos:
+            erros.append(f'dois documentos gerariam o mesmo PDF: {destino}')
+        else:
+            destinos.add(destino)
+            unicos.append(alvo)
+    return unicos, erros
 
 
 def titulo_do_notebook(nb):
@@ -91,7 +106,7 @@ def titulo_do_notebook(nb):
     duas formas aparecem conforme quem salvou o arquivo. O join cobre as duas:
     numa string, devolve a própria string.
     """
-    for celula in json.loads(nb.read_text())['cells']:
+    for celula in json.loads(nb.read_text(encoding='utf-8'))['cells']:
         if celula['cell_type'] == 'markdown':
             for linha in ''.join(celula['source']).splitlines():
                 if linha.startswith('# '):
@@ -99,45 +114,51 @@ def titulo_do_notebook(nb):
     return nb.stem.replace('-', ' ')
 
 
-def gerar(entrada, orientacao, sem_codigo):
-    from playwright.sync_api import sync_playwright
-
-    destino = entrada.parent
-    if entrada.suffix == '.html':
-        # O documento manda: sem margem, sem rodapé, escala 1.
-        html, temporario = entrada, False
-        extras = {'scale': 1, 'margin': dict.fromkeys(('top', 'bottom', 'left', 'right'), '0')}
-    else:
-        html, temporario = destino / f'{entrada.stem}.paginar.html', True
-        comando = [sys.executable, '-m', 'nbconvert', '--to', 'html', '--embed-images',
-                   '--output', html.name, '--output-dir', str(destino), str(entrada)]
-        if sem_codigo:
-            comando.append('--no-input')
-        subprocess.run(comando, check=True, capture_output=True)
-
-        html.write_text(html.read_text().replace(
-            '</head>', CSS.format(orientacao=orientacao) + '</head>', 1))
-        extras = {
-            'scale': 0.8,
-            'display_header_footer': True,
-            'header_template': '<span></span>',
-            'footer_template': RODAPE.format(titulo=titulo_do_notebook(entrada)),
-            'margin': {'top': '10mm', 'bottom': '12mm', 'left': '12mm', 'right': '12mm'},
-        }
-
-    pdf = destino / f'{entrada.stem}.pdf'
+def gerar(entrada, orientacao, sem_codigo, navegador):
+    """Renderiza um documento; só substitui o PDF quando a impressão termina."""
+    html, temporario, pagina, pdf_temporario = entrada, None, None, None
+    pdf = entrada.with_suffix('.pdf')
     try:
-        with sync_playwright() as p:
-            navegador = p.chromium.launch()
-            pagina = navegador.new_page()
-            pagina.goto(html.as_uri(), wait_until='networkidle')
-            pagina.pdf(path=str(pdf), prefer_css_page_size=True, print_background=True, **extras)
-            navegador.close()
+        if entrada.suffix.lower() == '.html':
+            extras = {'scale': 1,
+                      'margin': dict.fromkeys(('top', 'bottom', 'left', 'right'), '0')}
+        else:
+            comando = [sys.executable, '-m', 'nbconvert', '--to', 'html',
+                       '--embed-images', '--stdout', str(entrada)]
+            if sem_codigo:
+                comando.append('--no-input')
+            conteudo = subprocess.run(comando, check=True, capture_output=True,
+                                      text=True).stdout
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8',
+                    prefix='.paginar-', suffix='.paginar.html',
+                    dir=entrada.parent, delete=False) as arquivo:
+                temporario = html = pathlib.Path(arquivo.name)
+                arquivo.write(conteudo.replace(
+                    '</head>', CSS.format(orientacao=orientacao) + '</head>', 1))
+            extras = {
+                'scale': 0.8,
+                'display_header_footer': True,
+                'header_template': '<span></span>',
+                'footer_template': RODAPE.format(titulo=escape(titulo_do_notebook(entrada))),
+                'margin': {'top': '10mm', 'bottom': '12mm', 'left': '12mm', 'right': '12mm'},
+            }
+        with tempfile.NamedTemporaryFile(prefix='.paginar-', suffix='.pdf',
+                                         dir=entrada.parent, delete=False) as arquivo:
+            pdf_temporario = pathlib.Path(arquivo.name)
+        pagina = navegador.new_page()
+        pagina.goto(html.as_uri(), wait_until='networkidle')
+        pagina.pdf(path=str(pdf_temporario), prefer_css_page_size=True,
+                   print_background=True, **extras)
+        pdf_temporario.replace(pdf)
+        return pdf
     finally:
-        if temporario:
-            html.unlink(missing_ok=True)
-
-    return pdf
+        try:
+            if pagina is not None:
+                pagina.close()
+        finally:
+            for caminho in (temporario, pdf_temporario):
+                if caminho is not None:
+                    caminho.unlink(missing_ok=True)
 
 
 def main():
@@ -148,17 +169,49 @@ def main():
     ap.add_argument('--sem-codigo', action='store_true', help='esconde as células de código')
     args = ap.parse_args()
 
-    alvos = list(arquivos(args.entradas))
+    alvos, erros = arquivos(args.entradas)
     if not alvos:
-        sys.exit('nenhum notebook nem HTML encontrado')
+        for erro in erros:
+            print(erro, file=sys.stderr)
+        return 1
 
-    if not all(importlib.util.find_spec(p) for p in PACOTES):
-        sys.exit(reexecutar())
+    pacotes = ['playwright']
+    if any(alvo.suffix.lower() == '.ipynb' for alvo in alvos):
+        pacotes.append('nbconvert')
+    if not all(importlib.util.find_spec(pacote) for pacote in pacotes):
+        return reexecutar(pacotes)
 
-    for alvo in alvos:
-        pdf = gerar(alvo, 'portrait' if args.retrato else 'landscape', args.sem_codigo)
-        print(f'{pdf}  ({pdf.stat().st_size // 1024} KB)')
+    for erro in erros:
+        print(erro, file=sys.stderr)
+
+    from playwright.sync_api import Error, sync_playwright
+
+    with sync_playwright() as p:
+        try:
+            navegador = p.chromium.launch()
+        except Error as erro:
+            print(f'não foi possível abrir o Chromium: {erro}\n'
+                  f'Para instalar: {sys.executable} -m playwright install chromium-headless-shell',
+                  file=sys.stderr)
+            return 1
+        try:
+            for alvo in alvos:
+                try:
+                    pdf = gerar(alvo, 'portrait' if args.retrato else 'landscape',
+                                args.sem_codigo, navegador)
+                    print(f'{pdf}  ({pdf.stat().st_size // 1024} KB)')
+                except (OSError, ValueError, KeyError, subprocess.CalledProcessError, Error) as erro:
+                    detalhe = (erro.stderr if isinstance(erro, subprocess.CalledProcessError)
+                               else str(erro))
+                    print(f'falha ao converter {alvo}: {detalhe}', file=sys.stderr)
+                    erros.append(str(alvo))
+        finally:
+            navegador.close()
+    return int(bool(erros))
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        sys.exit(main())
+    except (OSError, subprocess.CalledProcessError) as erro:
+        sys.exit(f'falha ao preparar o ambiente: {erro}')

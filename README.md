@@ -4,16 +4,14 @@
 
 <h1 align="center">paginar</h1>
 
-<p align="center"><strong>Convert Jupyter notebooks and HTML files to paginated PDFs from the command line, without LaTeX.</strong></p>
+<p align="center">Convert HTML documents and Jupyter notebooks to PDF, one file or a batch.</p>
 
-Converta notebooks Jupyter e currículos HTML em PDF pelo terminal. O `paginar`
-gera arquivos prontos para guardar ou compartilhar.
+O `paginar` gera PDFs de currículos, relatórios e outros documentos HTML ou
+notebooks Jupyter pelo terminal. Usa Chromium, sem precisar de LaTeX.
 
 ## Instalar
 
-Requer Python 3.9 ou mais novo, `curl` e `~/.local/bin` no `PATH`.
-O instalador baixa um único arquivo executável. Se o shell não encontrar
-`paginar`, confira se `~/.local/bin` está no `PATH`.
+Requer Linux, Python 3.9 ou mais novo e `curl`.
 
 ```sh
 mkdir -p ~/.local/bin
@@ -21,83 +19,107 @@ curl -fsSLo ~/.local/bin/paginar https://raw.githubusercontent.com/FelipeArtur/p
 chmod +x ~/.local/bin/paginar
 ```
 
-## Uso rápido
+Inclua `~/.local/bin` no `PATH` do seu shell. Para atualizar, repita os comandos.
+
+Na primeira conversão, o script instala as dependências em um ambiente Python
+isolado e baixa o Chromium headless. Esse preparo exige internet. As próximas
+execuções reutilizam o ambiente e o navegador baixado. O Python do sistema
+continua com seus próprios pacotes.
+
+## Converter documentos
 
 ```sh
 paginar curriculo.html
 paginar relatorio.ipynb
+paginar documento.html outro.html analise.ipynb
+paginar *.html
 paginar notebooks/
-paginar *.ipynb
 ```
 
-O PDF fica ao lado do arquivo de entrada, com o mesmo nome-base e extensão
-`.pdf`. Uma pasta processa os arquivos `.ipynb` que estão nela; a busca não é
-recursiva.
+Cada PDF fica ao lado da entrada, com o mesmo nome e extensão `.pdf`.
+Uma pasta seleciona somente os notebooks `.ipynb` diretamente dentro dela.
+Para HTML, informe os arquivos ou use um glob como `*.html`.
 
-## Opções
+O lote compartilha um navegador. Se um arquivo falhar, o comando informa o
+problema e continua com os demais. O código de saída é `1` quando alguma entrada
+ou conversão falha e `0` quando todas terminam. Entradas repetidas são processadas
+uma vez; documentos que gerariam o mesmo PDF são sinalizados como conflito.
 
-| Comando | Efeito |
+Uma nova conversão substitui o PDF existente depois que a impressão termina.
+Se ela falhar, o PDF anterior permanece.
+
+## HTML e notebooks
+
+| Entrada | Tratamento |
 | --- | --- |
-| `paginar arquivo.ipynb` | Gera um PDF em A4 paisagem. |
-| `paginar arquivo.ipynb --retrato` | Gera o PDF em A4 retrato. |
-| `paginar arquivo.ipynb --sem-codigo` | Oculta células de código e mantém resultados. |
-| `paginar arquivo.html` | Imprime o HTML respeitando o layout do documento. |
-| `paginar pasta/` | Processa notebooks `.ipynb` dentro da pasta. |
-| `paginar --help` | Mostra todas as opções. |
+| `.html` | Imprime o documento com seu CSS, tamanho de página e margens. |
+| `.ipynb` | Converte as saídas salvas para HTML e aplica paginação A4. |
 
-As opções `--retrato` e `--sem-codigo` se aplicam a notebooks.
+HTML mantém o layout do autor, com escala 1 e sem rodapé adicional. Você pode
+usar `@page` no CSS para definir papel e margens. Isso serve, por exemplo, para
+imprimir um currículo que já tem seu próprio template.
 
-## Como cada arquivo é tratado
+Notebooks usam A4 paisagem, escala 0,8 e rodapé com título e número da página.
+O título vem do primeiro cabeçalho Markdown `#`, ou do nome do arquivo quando
+o cabeçalho falta. O CSS tenta manter figuras e saídas na mesma página;
+conteúdo maior que uma página ainda pode precisar de ajustes no documento.
 
-| Entrada | Resultado |
-| --- | --- |
-| Notebook `.ipynb` | Converte para HTML, incorpora imagens e aplica o layout de impressão. |
-| Arquivo `.html` | Usa o layout definido no próprio documento; não injeta CSS nem rodapé. |
-| Pasta | Processa apenas arquivos `.ipynb` diretamente dentro dela. HTML precisa ser informado pelo caminho. |
+```sh
+paginar relatorio.ipynb --retrato
+paginar relatorio.ipynb --sem-codigo
+paginar --help
+```
 
-Notebooks saem em A4 paisagem, com escala 0,8 e rodapé. O título do rodapé vem
-do primeiro cabeçalho Markdown `#`; sem esse cabeçalho, usa o nome do arquivo.
-Figuras e saídas recebem regras para evitar quebras entre páginas.
+`--retrato` muda o papel do notebook para A4 retrato. `--sem-codigo` oculta as
+células de código e mantém os resultados. As duas opções se aplicam a notebooks.
 
-HTML é tratado como documento pronto. Assim, um currículo que já define
-`@page`, margens e escala mantém o layout que você preparou.
-
-## Atualizar saídas do notebook
-
-O `paginar` não executa o notebook. Ele imprime as saídas que já estão salvas
-no arquivo. Se elas estiverem vazias ou desatualizadas, execute o notebook
-antes:
+O `paginar` imprime as saídas salvas e não executa células. Para atualizá-las:
 
 ```sh
 jupyter nbconvert --to notebook --execute --inplace relatorio.ipynb
 ```
 
-## Dependências e cache
+## Dependências
 
-Quando o Python atual já tem `nbconvert` e `playwright`, o `paginar` usa esse
-ambiente. Caso contrário, cria um ambiente temporário e instala as dependências
-a cada execução. Isso costuma acrescentar cerca de 15 segundos. Na primeira
-execução, também baixa o Chromium headless; é preciso ter acesso à internet.
-O ambiente temporário é removido ao fim de cada execução.
+HTML usa Playwright. Notebooks também usam nbconvert. Se o Python ativo já tem
+os pacotes necessários, o script usa esse ambiente. Caso contrário, usa
+`~/.cache/paginar/python<versão>/`. A variável `XDG_CACHE_HOME`, quando definida,
+altera a raiz desse cache.
 
-O Chromium headless fica em `~/.cache/ms-playwright` e pode ser compartilhado
-com outras ferramentas Playwright. O cache usa cerca de 262 MB. O `paginar`
-baixa apenas o `chromium-headless-shell`; o pacote Chromium completo usaria
-mais 389 MB.
+O Chromium usa o cache padrão do Playwright, normalmente
+`~/.cache/ms-playwright`. Se os pacotes já estão instalados mas o navegador
+falta, a mensagem de erro mostra o comando para baixá-lo.
 
-Para apagar o cache quando nenhuma outra ferramenta depender dele:
+Temporários de conversão são removidos ao terminar. O ambiente Python e o
+navegador ficam disponíveis para outras execuções.
+
+## Usar um checkout ou submódulo
+
+O executável funciona direto do repositório:
 
 ```sh
-rm -rf ~/.cache/ms-playwright
+./paginar documento.html relatorio.ipynb
 ```
 
-## Exemplo
+Ao clonar um projeto que inclui `paginar` como submódulo, use
+`git clone --recurse-submodules` ou execute `git submodule update --init`
+no repositório principal. Ele registra a versão do `paginar` usada pelo projeto.
 
-O notebook [`exemplo/relatorio-exemplo.ipynb`](exemplo/relatorio-exemplo.ipynb)
-gera uma tabela e dois gráficos. O PDF resultante tem três páginas A4 paisagem:
-[`exemplo/relatorio-exemplo.pdf`](exemplo/relatorio-exemplo.pdf).
+## Exemplo e verificação
+
+O [notebook de exemplo](exemplo/relatorio-exemplo.ipynb) contém dados sintéticos,
+uma tabela e dois gráficos. Veja o [PDF](exemplo/relatorio-exemplo.pdf):
 
 ![Página de exemplo](exemplo/pagina-exemplo.png)
+
+```sh
+python tests/test_paginar.py
+python tests/test_paginar.py --integracao
+```
+
+A primeira checagem usa somente a biblioteca padrão. A integração exige
+Playwright, nbconvert e Chromium no ambiente de teste e verifica PDFs reais,
+continuidade após falha e limpeza dos temporários.
 
 ## Licença
 
